@@ -1,0 +1,148 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "Julija Kackina"
+date: "28 May 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har>
+
+This report describes how this data was used in predicting algoritms aiming to predict how well the activity(Unilateral Dumbbell Biceps Curl) was done.
+
+
+##Environment preparation
+
+Let's load all needed libraries.
+```{r,warning=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+##Data Preparation
+
+### Download the Data
+
+```{r cache = T}
+trainLink <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testLink <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainingData <- read.csv(url(trainLink), na.strings=c("NA","#DIV/0!",""))
+testingData <- read.csv(url(testLink), na.strings=c("NA","#DIV/0!",""))
+```
+trainingData is a dataset I'll use for model building.
+testingData is a dataset I'll use to predict a classification variable using a builded model.
+
+### Data Cleaning
+
+```{r}
+dim(trainingData)
+dim(testingData)
+```
+trainingData contains 160 variables and 19,622 observations, while testingData contains only 20 observations. Let's remove useless variables. First I'd like to exclude the colums containing summary statistics by window.These variables contain mostly NA values.It seems that the columns with missing variables contain summary statistics for each window for data collection.
+```{r}
+training1 <- trainingData[, colSums(is.na(trainingData)) == 0]
+dim(training1)
+```
+There was 100 variables containing  missing values. 
+There are some variables useless for classification exercise like row ID, user name, timestamp. These variables we find in first 7 columns of the dataset.
+```{r}
+training2=training1[,-c(1:7)]
+dim(training2)
+```
+The variables with too little or no variance are useless for classification exercise. Let's use NZV function to identify them.
+```{r}
+NZV <- nearZeroVar(training2, saveMetrics = TRUE)
+sum(NZV$nzv)
+```
+There are no zero-variance variables. So the final dataset contanes 53 variables.
+
+###Data Splitting
+
+I'll use 70% of daatset for training purpose and 30% for model testing.
+```{r}
+set.seed(18042018) 
+inTrain = createDataPartition(training2$classe, p = 0.70, list = FALSE)
+training = training2[inTrain, ]
+testing = training2[-inTrain, ]
+```
+
+###Data visualisation
+
+I selected some variables and ploted pairwase scatterplots. Different colours identify different "class" variable values.
+```{r}
+featurePlot(x=training[,c("roll_belt", "roll_forearm", "pitch_forearm", "magnet_dumbbell_z", "accel_dumbbell_y")], y=training$classe, plot="pairs")
+qplot(roll_belt, roll_forearm, data=training, colour=classe)
+```
+
+This classification problem is not so easy, we will use much more variables for the model building. In the graph we can see different groups of the same colour dots. It is a good sign.
+
+##Model Building
+
+The suitable models for classification exercise are Decission Tree and Random Forest.
+
+###Prediction with Decission Trees
+
+Decision tree is a model easy to interpret and has better performing in non linear settings. Let's use *rpart* function from *rpart* library.
+```{r, cashe=TRUE}
+modelTree <- rpart(classe ~ ., data = training, method = "class")
+```
+The graph below describes the fitted classification process.
+```{r}
+prp(modelTree)
+```
+
+
+Let's check model Accuracy
+```{r}
+predDT=predict(modelTree, testing, type = "class")
+confusionMatrix(predDT, testing$classe)
+```
+
+The model's Accuracy is 0.7344, so out-of-sample error is relatively high - 0.2656. One of the methods for model's improovement is boosting.
+
+### Boosted Decision Tree
+
+When boosting used with decision tree learning, information gathered at each stage of the AdaBoost algorithm about the relative 'hardness' of each training sample is fed into the tree growing algorithm such that later trees tend to focus on harder-to-classify examples. AdaBoost (with decision trees as the weak learners) is often referred to as the best out-of-the-box classifier.
+
+```{r, cashe=TRUE}
+set.seed(3052018)
+modelBTree <- train(classe ~ .,method = "gbm",data = training,verbose = F)
+predBTree <- predict(modelBTree, newdata = testing)
+confusionMatrix(predBTree, testing$classe)$overall[1]
+```
+
+Accuracy of Boosted Decision Tree is much better. But let's take a look on an other model suited for this type of exercise - Random Forest.
+
+###Prediction with Random Forest
+
+This model is based on bootstrap samples, so we take a resample of our observed data. And then we rebuild classification trees on each of those bootstrap samples. The pros for this approach are that it's quite accurate. And along with boosting, it's one of the most, widely used and highly accurate methods for prediction.
+```{r, cashe=TRUE}
+set.seed(3052018)
+modelForest = randomForest(classe ~ ., data=training)
+predRF = predict(modelForest, testing, type = "class")
+confusionMatrix(predRF, testing$classe)$overall[1]
+```
+Randome Forest could be the best model because of it has a high accuracy -  0.9949
+Accuracy on the training set is what's called resubstitution accuracy is often optimistic. In other words, we're trying a bunch of different models, and we're picking the best one on the training set, and that will always be tuned a little bit to the quirks of that data set, and may not be the accurate representation of what that. Prediction accuracy would be a new sample. So, a better estimate comes from an independent data set. Cross Validation permits use only training set for the best model selection and estimate unbiased out-of-sample Acuracy on the training dataset.
+
+###Cross Validation
+
+```{r, cashe=TRUE}
+set.seed(28052018)
+ctrl <- trainControl(method = "cv")
+modelForestCV <- train(classe ~ ., method = "rf",data = training, trControl = ctrl,importance = T)
+predRFCV = predict(modelForestCV$finalModel, testing, type = "class")
+confusionMatrix(predRFCV, testing$classe)
+```
+The last model has a high Accuracy -  0.9937 and low out-of-sample error 0.006. This accuracy is slightly lower than accuracy of the previous model, but in this case we have unbiased accuracy estimate. So I'll use this model for the forecast on the testing set.
+```{r}
+prediction <- predict(modelForestCV, newdata=testingData)
+```
+
